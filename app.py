@@ -1,11 +1,18 @@
-import streamlit as st
 import py3Dmol
+import streamlit as st
 from stmol import showmol
-from protein_utils import get_amino_acids, get_prosite_positions, get_pseudosequence
-
+import numpy as np
+from protein_utils import (
+    count_distance,
+    get_amino_acids,
+    get_mhc_chains,
+    get_prosite_positions,
+    get_pseudosequence,
+)
 
 cartoon_radius = 0.2
 stick_radius = 0.2
+styles = ["cartoon", "line", "cross", "stick", "sphere"]
 
 
 def main():
@@ -13,15 +20,15 @@ def main():
     st.title("Protein data bank visualization")
     pdb_id = st.sidebar.text_area("Enter PDB id", "1A4J").strip()
     pattern_id = st.sidebar.text_area(f"Enter PROSITE pattern id", "PS00290").strip()
-    dist = st.sidebar.number_input("Distance threshold", 0.3)
-    bcolor = st.sidebar.color_picker("Pick A Color", "#FFFFFF")
-    style = st.sidebar.selectbox(
-        "style", ["cartoon", "line", "cross", "stick", "sphere"]
-    )
-    hl_color = st.sidebar.text_input(label="Highlight Color", value="red")
-    hl_chain = st.sidebar.text_input(label="Highlight Chain", value="A")
+    threshold = st.sidebar.number_input("Distance threshold", 10)
+    bcolor = st.sidebar.color_picker("Pick a background color", "#FFFFFF")
+    style = st.sidebar.selectbox("Select a style", styles)
+    chosen_color = st.sidebar.text_input("Select a color for PROSITE pattern", "red")
     try:
         sequence = get_amino_acids(pdb_id)[0]
+        chosen_chain = st.sidebar.selectbox(
+            "Select a chain to highlight", [c.id for c in get_mhc_chains(pdb_id)]
+        )
         view = py3Dmol.view(query="pdb:" + pdb_id)
         view.setStyle({style: {"color": "white"}})
         view.setBackgroundColor(bcolor)
@@ -32,12 +39,13 @@ def main():
         positions = get_prosite_positions(pattern_id, sequence)
         for hl_resi in positions:
             view.addStyle(
-                {"chain": hl_chain, "resi": hl_resi, "elem": "C"},
-                {style: {"color": hl_color, "radius": stick_radius}},
+                {"chain": chosen_chain, "resi": hl_resi, "elem": "C"},
+                {style: {"color": chosen_color, "radius": stick_radius}},
             )
 
             view.addStyle(
-                {"chain": hl_chain, "resi": hl_resi}, {style: {"radius": stick_radius}}
+                {"chain": chosen_chain, "resi": hl_resi},
+                {style: {"radius": stick_radius}},
             )
         st.subheader(f"3D structure of a PDB file")
         showmol(view, width=1200)
@@ -46,6 +54,14 @@ def main():
         st.text(pseudoseq)
         if len(positions) > 1:
             st.text(f"Start: {positions[0]} Stop: {positions[-1]}")
+        st.subheader("A matrix with distances")
+        chains_df = count_distance(get_mhc_chains(pdb_id))
+        subset_df = (
+            chains_df.where(chains_df >= threshold, np.nan)
+            .dropna(how="all", axis=0)
+            .dropna(how="all", axis=1)
+        )
+        st.dataframe(subset_df)
     except:
         st.error("You provided wrong prosite id")
 

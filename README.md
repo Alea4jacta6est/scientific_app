@@ -2,6 +2,8 @@
 
 The demo app that visualizes proteins 3d structure
 
+<img src="img/demo.png">
+
 ## How to run the app?
 ### Locally
 

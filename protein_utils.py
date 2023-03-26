@@ -1,19 +1,27 @@
-import requests
 import re
-import numpy as np
-from Bio.ExPASy import Prosite, get_prosite_raw
-from Bio.PDB import PDBParser, PDBList
 from typing import List
+
+import pandas as pd
+import requests
+from Bio.ExPASy import Prosite, get_prosite_raw
+from Bio.PDB import PDBList, PDBParser, is_aa
+from scipy.spatial.distance import euclidean
 
 
 def get_amino_acids(code: str):
+    link = f"https://www.ebi.ac.uk/pdbe/api/pdb/entry/molecules/{code}"
     try:
-        data = requests.get(
-            f"https://www.ebi.ac.uk/pdbe/api/pdb/entry/molecules/{code}"
-        ).json()[code.lower()]
+        data = requests.get(link).json()[code.lower()]
         return [data[i]["sequence"] for i in range(len(data)) if "sequence" in data[i]]
     except Exception:
         raise ValueError("Wrong pdb id, double check your input")
+
+
+def get_mhc_chains(pdb_id):
+    parser = PDBParser()
+    pdb_file = PDBList().retrieve_pdb_file(pdb_id, pdir="./files", file_format="pdb")
+    structure = parser.get_structure(pdb_id, pdb_file)
+    return structure.get_chains()
 
 
 def get_prosite_positions(pattern_id: str, protein_sequence: str):
@@ -57,43 +65,50 @@ def get_pseudosequence(seq: str, mhc_residues: List[int]) -> str:
     """
     pseudoseq = ""
     for i, residue in enumerate(seq):
-        if i + 1 in mhc_residues:
+        if i + 1 not in mhc_residues:
             pseudoseq += "-"
         else:
             pseudoseq += residue
     return pseudoseq
 
 
-# def get_filtered_residues(pdb_id, dist_threshold):
-#     d3to1 = {'CYS': 'C', 'ASP': 'D', 'SER': 'S', 'GLN': 'Q', 'LYS': 'K',
-#     'ILE': 'I', 'PRO': 'P', 'THR': 'T', 'PHE': 'F', 'ASN': 'N',
-#     'GLY': 'G', 'HIS': 'H', 'LEU': 'L', 'ARG': 'R', 'TRP': 'W',
-#     'ALA': 'A', 'VAL':'V', 'GLU': 'E', 'TYR': 'Y', 'MET': 'M'}
-#     parser = PDBParser()
-#     pdbl = PDBList()
-#     pdb_file = pdbl.retrieve_pdb_file(pdb_id, pdir='./files', file_format='pdb')
-#     peptide_struct = parser.get_structure(pdb_id, pdb_file)
-#     for model in peptide_struct:
-#          for chain in model:
-#             seq = []
-#             for residue in chain:
-#                 if residue.resname in d3to1:
-#                     seq.append(d3to1[residue.resname])
-#     print("".join(seq))
-#     # Extract peptide and MHC chain objects
-#     peptide = peptide_struct[0]['A']
-#     print([i for i in peptide.get_residues()])
-# print(dir(peptide))
-# # # mhc_chain = mhc_struct[0]['A']
-# # Get coordinates of all atoms in the peptide and MHC chain
-# peptide_atoms = [atom.get_coord() for atom in peptide.get_atoms() if atom.get_name() == 'CA']
-# mhc_atoms = [atom.get_coord() for atom in mhc_chain.get_atoms() if atom.get_name() == 'CA']
-# # Calculate pairwise distances between all atoms in the peptide and MHC chain
-# dist_matrix = np.linalg.norm(np.array(peptide_atoms)[:, np.newaxis, :] - np.array(mhc_atoms)[np.newaxis, :, :], axis=-1)
+def count_distance(mhc_chains):
+    chain_L, chain_H = None, None
+    for chain in mhc_chains:
+        if chain.id == "L":
+            chain_L = chain
+        elif chain.id == "H":
+            chain_H = chain
+    if chain_L is None or chain_H is None:
+        raise ValueError("Could not find L and H chains in MHC chains")
+    distances = pd.DataFrame(
+        index=[
+            residue.id[1]
+            for residue in chain_L.get_residues()
+            if is_aa(residue.get_resname(), standard=True)
+        ],
+        columns=[
+            residue.id[1]
+            for residue in chain_H.get_residues()
+            if is_aa(residue.get_resname(), standard=True)
+        ],
+    )
+    for residue_L in chain_L.get_residues():
+        if not is_aa(residue_L.get_resname(), standard=True):
+            continue
+        for residue_H in chain_H.get_residues():
+            if not is_aa(residue_H.get_resname(), standard=True):
+                continue
+            distance = euclidean(
+                residue_L["CA"].get_coord(), residue_H["CA"].get_coord()
+            )
+            distances.at[residue_L.id[1], residue_H.id[1]] = distance
+    distances = distances.astype(float)
+    return distances
 
-# # Get minimum distances for each amino acid in the peptide
-# min_dists = np.min(dist_matrix, axis=1)
-# filtered_residues = [residue for residue, dist in zip(peptide, min_dists) if dist <= dist_threshold]
-# return filtered_residues
 
-# print(get_filtered_residues(pdb_id="1A4J", dist_threshold=0.3))
+if __name__ == "__main__":
+    pdb_id = "1A4J"
+    sequence = get_amino_acids(pdb_id)[0]
+    mhc_chains = get_mhc_chains(pdb_id)
+    print(count_distance(mhc_chains))
